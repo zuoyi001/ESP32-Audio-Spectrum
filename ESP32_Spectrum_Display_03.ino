@@ -19,36 +19,58 @@
 #include "arduinoFFT.h" // Standard Arduino FFT library: in IDE, Manage Library, then search for FFT 
 arduinoFFT FFT = arduinoFFT(); // or manually install from https://github.com/kosme/arduinoFFT
 
-
-// comment this out to use regular ILI9341
-#define WROVER_KIT
+// comment these out to use regular ILI9341
+// only uncomment ODROID_GO or WROVER_KIT or both
+#define ODROID_GO
+//#define WROVER_KIT
 
 #ifdef WROVER_KIT
-#define TFT_DC 21
-#define TFT_CS 0
-#define TFT_RST 18
-#define SPI_MISO 25
-#define SPI_MOSI 23
-#define SPI_CLK 19
-#define LCD_BL_CTR 5
-#include "WROVER_KIT_LCD.h" // https://github.com/espressif/WROVER_KIT_LCD
-#include <Adafruit_GFX.h>
-// Some code uses the Adafruit_ILI9341 interface for tft, fix this here
-#define Adafruit_ILI9341 WROVER_KIT_LCD
-#define min(X, Y) (((X) < (Y)) ? (X) : (Y))
-#define max(X, Y) (((X) > (Y)) ? (X) : (Y))
-Adafruit_ILI9341 tft;
+  #define TFT_DC 21
+  #define TFT_CS 0
+  #define TFT_RST 18
+  #define SPI_MISO 25
+  #define SPI_MOSI 23
+  #define SPI_CLK 19
+  #define LCD_BL_CTR 5
+  #include "WROVER_KIT_LCD.h" // https://github.com/espressif/WROVER_KIT_LCD
+  #include <Adafruit_GFX.h>
+  // Some code uses the Adafruit_ILI9341 interface for tft, fix this here
+  #define Adafruit_ILI9341 WROVER_KIT_LCD
+  #define min(X, Y) (((X) < (Y)) ? (X) : (Y))
+  #define max(X, Y) (((X) > (Y)) ? (X) : (Y))
+  Adafruit_ILI9341 tft;
 #else
-#define TFT_RST 18
-#define SPI_MISO 25
-#define SPI_MOSI 23
-#define SPI_CLK 19
-#define LCD_BL_CTR 5
-#define TFT_CS 10
-#define TFT_DC 9
-#include <Adafruit_ILI9341.h>
-#include <Adafruit_GFX.h>
-Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC);
+  #ifdef ODROID_GO
+    #define TFT_DC 21
+    #define TFT_CS 5
+    #define TFT_LED_PIN 14
+    #define TFT_MOSI 23
+    #define TFT_MISO 19
+    #define TFT_SCLK 18
+    #define TFT_RST -1
+    #include <Adafruit_ILI9341.h>
+    #include <Adafruit_GFX.h>
+    #define min(X, Y) (((X) < (Y)) ? (X) : (Y))
+    #define max(X, Y) (((X) > (Y)) ? (X) : (Y))
+    Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC);
+    #define A0 4
+    #define ILI9341_TFTWIDTH 320
+    #define ILI9341_TFTHEIGHT 240
+    #define TFT_WIDTH 320
+    #define TFT_HEIGHT 240
+  #else
+    #define TFT_RST 18
+    #define SPI_MISO 25
+    #define SPI_MOSI 23
+    #define SPI_CLK 19
+    #define LCD_BL_CTR 5
+    #define TFT_CS 10
+    #define TFT_DC 9
+    #include <Adafruit_ILI9341.h>
+    #include <Adafruit_GFX.h>
+    Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC);
+  #endif
+
 #endif
 
 #ifdef ILI9341_TFTWIDTH
@@ -63,7 +85,7 @@ Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC);
 #endif
 
 #define WAVEFORM_YPOS (TFT_HEIGHT/2) - 50
-#define WAVEFORM_SQUEEZE 5 // e.g. 5 => 1/5th of the screen
+#define WAVEFORM_SQUEEZE 3 // e.g. 5 => 1/5th of the screen
 
 
 int SAMPLES = 512; // Must be a power of 2
@@ -86,14 +108,14 @@ eqBand audiospectrum[EQBANDS] = {
      Adjust the amplitude/bandWidth values
      to fit your microphone
   */
-  { "125Hz", 1000, 2,   0, 0, 0, 0, 0},
+  { "125Hz", 1500, 2,   0, 0, 0, 0, 0},
   { "250Hz", 500,  2,   0, 0, 0, 0, 0},
   { "500Hz", 300,  3,   0, 0, 0, 0, 0},
   { "1KHz",  250,  7,   0, 0, 0, 0, 0},
   { "2KHz",  200,  14,  0, 0, 0, 0, 0},
-  { "4KHz",  100,  24,  0, 0, 0, 0, 0},
-  { "8KHz",  50,   48,  0, 0, 0, 0, 0},
-  { "16KHz", 25,   155, 0, 0, 0, 0, 0}
+  { "4KHz",  50,  24,  0, 0, 0, 0, 0},
+  { "8KHz",  25,   48,  0, 0, 0, 0, 0},
+  { "16KHz", 5,   155, 0, 0, 0, 0, 0}
 };
 
 /* store bandwidth variations when sample rate changes */
@@ -144,12 +166,23 @@ float volMod = 1; // fps maintainer: multiplier for waveform, more volume = smal
 float lastVolMod = 1;
 
 
+void setBrightness(uint8_t brightness) {
+  ledcSetup(2, 10000, 8);
+  ledcAttachPin(TFT_LED_PIN, 2);
+  ledcWrite(2, brightness);
+}
+
+
 void drawAudioSpectrumGrid() {
   tft.setTextColor(ILI9341_YELLOW);
 
   audospectrumheight = TFT_HEIGHT / bands_vratio;
   asvstart = TFT_HEIGHT - bandslabelmargin;
   asvend = asvstart - audospectrumheight - bandslabelmargin;
+
+  Serial.println("audospectrumheight:"+ String(audospectrumheight));
+  Serial.println("asvstart:"+String(asvstart));
+  Serial.println("asvend:"+String(asvend));
 
   Serial.println( "Audio Spectrum Height(px): " + String(audospectrumheight) + " Start at:" + String(asvstart) + " End at:" + String(asvend));
 
@@ -209,7 +242,7 @@ void setBandwidth() {
   for (byte j = 1; j < bands; j++) {
     bandWidth[j] = audiospectrum[j].bandWidth * multiplier + bandWidth[j - 1];
   }
-  wmultiplier = ((float)TFT_WIDTH / (float)SAMPLES) * 2;
+  wmultiplier = ((float)TFT_WIDTH / (float)SAMPLES) * 4;
 }
 
 
@@ -224,7 +257,9 @@ byte getBand(int i) {
 void peakWaveForm() {
   for (uint16_t i = 0; i < SAMPLES / 2; i++) {
     if (eQGraph[i] >= 0.00005) {
-      eQGraph[i] /= 2; //(2+getBand(i));
+      eQGraph[i] /= 2;//(2+getBand(i));
+    } else {
+      eQGraph[i] = 0;
     }
   }
 }
@@ -235,7 +270,7 @@ void displayWaveForm(uint16_t color) {
   uint16_t lastx = 1;
   uint16_t lasty = WAVEFORM_YPOS;
   float wSqueeze = WAVEFORM_SQUEEZE;
-  uint8_t maxWaveFormHeight = WAVEFORM_YPOS;
+  uint8_t maxWaveFormHeight = WAVEFORM_YPOS / 2;
 
   if (color == ILI9341_BLACK) {
     //isSaturating = wasSaturating;
@@ -244,23 +279,25 @@ void displayWaveForm(uint16_t color) {
     wasSaturating = isSaturating;
     lastVolMod = volMod;
     wafeformdirtoggler = !wafeformdirtoggler;
-    uint red = vol / 16;
-    color = tft.color565(red, 255-red, 0);
+    uint red = vol / 32;
+    color = tft.color565(red+128, 255-red, 0);
   }
-
+/*
   float toLog = 1.5-lastVolMod*1.5;
   if(toLog!=0.00) {
     // https://www.google.com/search?q=y%3D(-log(1.5-x*1.5))*8
     float volSqueezer = (-log(toLog))*8;
     if(volSqueezer > 0.00) {
-      wSqueeze += volSqueezer/*+WAVEFORM_SQUEEZE*/;
+      wSqueeze += volSqueezer;//+WAVEFORM_SQUEEZE;
     } else {
       wSqueeze /= -volSqueezer;
     }
   }
+  */
+  wSqueeze = 2;
 
   byte wafeformdirection = wafeformdirtoggler ? 1 : 0;
-  for (uint16_t i = 1; i < SAMPLES / 2; i++) {
+  for (uint16_t i = 1; i < SAMPLES / 4; i++) {
 
     if (eQGraph[i] >= 0.00005) {
       uint tmpy;
@@ -307,21 +344,25 @@ void captureSoundSample() {
     }
 
     vImag[i] = 0;
-    if (displayvolume) {
-      signalMin = min(signalMin, vReal[i]);
-      signalMax = max(signalMax, vReal[i]);
-      signalAvg += vReal[i];
-    }
+    
+    signalMin = min(signalMin, vReal[i]);
+    signalMax = max(signalMax, vReal[i]);
+    signalAvg += vReal[i];
 
     while ((micros() - newTime) < sampling_period_us) {
       // do nothing to wait
-      yield();
+      //yield();
     }
   }
 
   FFT.Windowing(vReal, SAMPLES, FFT_WIN_TYP_HAMMING, FFT_FORWARD);
   FFT.Compute(vReal, vImag, SAMPLES, FFT_FORWARD);
   FFT.ComplexToMagnitude(vReal, vImag, SAMPLES);
+
+  signalAvg /= SAMPLES;
+  vol = (signalMax - signalMin);
+  volWidth = map(vol, 0, 4096, 1, TFT_WIDTH);
+  volMod = (float) map(vol, 0, 4096, 1, 1000) / 1000;
 }
 
 
@@ -330,14 +371,11 @@ void captureSoundSample() {
 
 void renderSpectrometer() {
   if (displayvolume) {
-    signalAvg /= SAMPLES;
-    vol = (signalMax - signalMin);
-    volWidth = map(vol, 0, 4096, 1, TFT_WIDTH);
-    volMod = (float) map(vol, 0, 4096, 1, 1000) / 1000;
     tft.drawFastHLine(0, 20, volWidth, ILI9341_GREEN);
     tft.drawFastHLine(volWidth, 20, TFT_WIDTH - volWidth, ILI9341_BLACK);
-    if (volMod >= .25) isSaturating = true;
+    if (volMod >= .75) isSaturating = true;
     else isSaturating = false;
+    isSaturating = false;
   }
 
   if (displaywaveform) {
@@ -354,7 +392,7 @@ void renderSpectrometer() {
           displayBand(bandNum, audiospectrum[bandNum].curval);
         }
         if (displaywaveform) {
-          eQGraph[i] += audiospectrum[bandNum].curval;
+          eQGraph[i] = audiospectrum[bandNum].curval;
         }
       }
     }
@@ -477,18 +515,36 @@ void handleSerial() {
 void setup() {
   WiFi.mode(WIFI_MODE_NULL);
   Serial.begin(115200);
+  Serial.println();
 
+/*
   adc1_config_width(ADC_WIDTH_12Bit);   //Range 0-1023
   adc1_config_channel_atten(ADC1_CHANNEL_0, ADC_ATTEN_11db); //ADC_ATTEN_DB_11 = 0-3,6V
   sampling_period_us = round(1000000 * (1.0 / SAMPLING_FREQUENCY));
+*/
+
+  pinMode(A0, ANALOG);
+  /*
+  adcAttachPin(A0);
+  analogReadResolution(ADC_WIDTH_12Bit);
+  analogSetAttenuation(ADC_11db);
+*/
 
   tft.begin();
   tft.setRotation( 3 );
   tft.fillScreen(ILI9341_BLACK);
   tft.setTextColor(ILI9341_YELLOW);
   tft.setCursor(98, 42);
+  setBrightness(255);
   tft.print("Sampling at: " + String(sampling_period_us) + "uS");
+  Serial.println("Screen dimensions: " + String(TFT_WIDTH) + "x" + String(TFT_HEIGHT));
+  Serial.println("wmultiplier:" + String(wmultiplier));
+  Serial.println("bands_width:"+String(bands_width));
+  Serial.println("bands_pad:"+String(bands_pad));
+  Serial.println("bandslabelpos:"+String(bandslabelpos));
+  Serial.println("bandslabelmargin:"+String(bandslabelmargin));
 
+  
   delay(1000);
 
   tft.fillScreen(ILI9341_BLACK);
@@ -496,6 +552,7 @@ void setup() {
   drawAudioSpectrumGrid();
   setBandwidth();
   memset(eQGraph, 0, TFT_WIDTH);
+
 }
 
 
