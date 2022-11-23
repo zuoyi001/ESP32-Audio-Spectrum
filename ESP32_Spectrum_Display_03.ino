@@ -1,92 +1,567 @@
-/* ESP32 Audio Spectrum Analyser on an SSD1306/SH1106 Display, 8-bands 125, 250, 500, 1k, 2k, 4k, 8k, 16k
- * Improved noise performance and speed and resolution.
- * The MIT License (MIT) Copyright (c) 2017 by David Bird. 
- * The formulation and display of an AUdio Spectrum using an ESp8266 or ESP32 and SSD1306 or SH1106 OLED Display using a Fast Fourier Transform
- * Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files 
- * (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, 
- * publish, distribute, but not to use it commercially for profit making or to sub-license and/or to sell copies of the Software or to 
- * permit persons to whom the Software is furnished to do so, subject to the following conditions:  
- * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software. 
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES 
- * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE 
- * LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN 
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. 
- * See more at http://dsbird.org.uk 
+/* ESP8266/32 Audio Spectrum Analyser on an SSD1306/SH1106 Display
+   The MIT License (MIT) Copyright (c) 2017 by David Bird.
+   The formulation and display of an AUdio Spectrum using an ESp8266 or ESP32 and SSD1306 or SH1106 OLED Display using a Fast Fourier Transform
+   Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files
+   (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge,
+   publish, distribute, but not to use it commercially for profit making or to sub-license and/or to sell copies of the Software or to
+   permit persons to whom the Software is furnished to do so, subject to the following conditions:
+   The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+   OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+   LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+   CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+   See more at http://dsbird.org.uk
 */
 
+#include <driver/adc.h> // needed to get to adc1_get_raw()
 #include <Wire.h>
-#include "arduinoFFT.h" // Standard Arduino FFT library https://github.com/kosme/arduinoFFT
-arduinoFFT FFT = arduinoFFT();
-/////////////////////////////////////////////////////////////////////////
-// Comment out the display your NOT using e.g. if you have a 1.3" display comment out the SSD1306 library and object
-#include "SH1106.h"     // https://github.com/squix78/esp8266-oled-ssd1306
-SH1106 display(0x3c, 17,16); // 1.3" OLED display object definition (address, SDA, SCL) Connect OLED SDA , SCL pins to ESP SDA, SCL pins
+#include <WiFi.h> // needed to disable the WiFi
+#include "arduinoFFT.h" // Standard Arduino FFT library: in IDE, Manage Library, then search for FFT 
+arduinoFFT FFT = arduinoFFT(); // or manually install from https://github.com/kosme/arduinoFFT
 
-//#include "SSD1306.h"  // https://github.com/squix78/esp8266-oled-ssd1306
-//SSD1306 display(0x3c, 16,17);  // 0.96" OLED display object definition (address, SDA, SCL) Connect OLED SDA , SCL pins to ESP SDA, SCL pins
-/////////////////////////////////////////////////////////////////////////
-#include "font.h" // The font.h file must be in the same folder as this sketch
-/////////////////////////////////////////////////////////////////////////
-#define SAMPLES 1024             // Must be a power of 2
+// comment these out to use regular ILI9341
+// only uncomment ODROID_GO or WROVER_KIT or both
+#define ODROID_GO
+//#define WROVER_KIT
+
+#ifdef WROVER_KIT
+  #define TFT_DC 21
+  #define TFT_CS 0
+  #define TFT_RST 18
+  #define SPI_MISO 25
+  #define SPI_MOSI 23
+  #define SPI_CLK 19
+  #define LCD_BL_CTR 5
+  #include "WROVER_KIT_LCD.h" // https://github.com/espressif/WROVER_KIT_LCD
+  #include <Adafruit_GFX.h>
+  // Some code uses the Adafruit_ILI9341 interface for tft, fix this here
+  #define Adafruit_ILI9341 WROVER_KIT_LCD
+  #define min(X, Y) (((X) < (Y)) ? (X) : (Y))
+  #define max(X, Y) (((X) > (Y)) ? (X) : (Y))
+  Adafruit_ILI9341 tft;
+#else
+  #ifdef ODROID_GO
+    #define TFT_DC 21
+    #define TFT_CS 5
+    #define TFT_LED_PIN 14
+    #define TFT_MOSI 23
+    #define TFT_MISO 19
+    #define TFT_SCLK 18
+    #define TFT_RST -1
+    #include <Adafruit_ILI9341.h>
+    #include <Adafruit_GFX.h>
+    #define min(X, Y) (((X) < (Y)) ? (X) : (Y))
+    #define max(X, Y) (((X) > (Y)) ? (X) : (Y))
+    Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC);
+    #define A0 4
+    #define ILI9341_TFTWIDTH 320
+    #define ILI9341_TFTHEIGHT 240
+    #define TFT_WIDTH 320
+    #define TFT_HEIGHT 240
+  #else
+    #define TFT_RST 18
+    #define SPI_MISO 25
+    #define SPI_MOSI 23
+    #define SPI_CLK 19
+    #define LCD_BL_CTR 5
+    #define TFT_CS 10
+    #define TFT_DC 9
+    #include <Adafruit_ILI9341.h>
+    #include <Adafruit_GFX.h>
+    Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC);
+  #endif
+
+#endif
+
+#ifdef ILI9341_TFTWIDTH
+#define TFT_WIDTH ILI9341_TFTWIDTH
+#else
+#define TFT_WIDTH 320
+#endif
+#ifdef ILI9341_TFTHEIGHT
+#define TFT_HEIGHT ILI9341_TFTHEIGHT
+#else
+#define TFT_HEIGHT 240
+#endif
+
+#define WAVEFORM_YPOS (TFT_HEIGHT/2) - 50
+#define WAVEFORM_SQUEEZE 3 // e.g. 5 => 1/5th of the screen
+
+
+int SAMPLES = 512; // Must be a power of 2
 #define SAMPLING_FREQUENCY 40000 // Hz, must be 40000 or less due to ADC conversion time. Determines maximum frequency that can be analysed by the FFT Fmax=sampleF/2.
-#define amplitude 150            // Depending on your audio source level, you may need to increase this value
+#define EQBANDS 8
+
+struct eqBand {
+  const char *freqname;
+  uint16_t amplitude;
+  byte bandWidth;
+  int peak;
+  int lastpeak;
+  uint16_t curval;
+  uint16_t lastval;
+  unsigned long lastmeasured;
+};
+
+eqBand audiospectrum[EQBANDS] = {
+  /*
+     Adjust the amplitude/bandWidth values
+     to fit your microphone
+  */
+  { "125Hz", 1500, 2,   0, 0, 0, 0, 0},
+  { "250Hz", 500,  2,   0, 0, 0, 0, 0},
+  { "500Hz", 300,  3,   0, 0, 0, 0, 0},
+  { "1KHz",  250,  7,   0, 0, 0, 0, 0},
+  { "2KHz",  200,  14,  0, 0, 0, 0, 0},
+  { "4KHz",  50,  24,  0, 0, 0, 0, 0},
+  { "8KHz",  25,   48,  0, 0, 0, 0, 0},
+  { "16KHz", 5,   155, 0, 0, 0, 0, 0}
+};
+
+/* store bandwidth variations when sample rate changes */
+int bandWidth[EQBANDS] = {
+  0, 0, 0, 0, 0, 0, 0, 0
+};
+
+// sample helpers, buffer and data
 unsigned int sampling_period_us;
 unsigned long microseconds;
-byte peak[] = {0,0,0,0,0,0,0,0};
-double vReal[SAMPLES];
-double vImag[SAMPLES];
-unsigned long newTime, oldTime;
-int dominant_value;
-/////////////////////////////////////////////////////////////////////////
-void setup() {
-  Serial.begin(115200);
-  Wire.begin(17,16); // SDA, SCL
-  display.init();
-  display.setFont(Dialog_plain_8);
-  //display.setFont(ArialMT_Plain_10);
-  display.flipScreenVertically(); // Adjust to suit or remove
-  sampling_period_us = round(1000000 * (1.0 / SAMPLING_FREQUENCY));
+double vReal[1024];
+double vImag[1024];
+unsigned long newTime;
+bool adcread = false; // use adc raw or analogread
+
+// waveform cache and settings
+float eQGraph[TFT_WIDTH];
+float wmultiplier = TFT_WIDTH / SAMPLES;
+bool wafeformdirtoggler = false;
+
+// EQ Bands settings
+uint16_t bands = EQBANDS;
+uint16_t bands_width = floor( TFT_WIDTH / bands );
+uint16_t bands_pad = bands_width - (TFT_WIDTH / 16);
+uint16_t colormap[255]; // color palette for the band meter (pre-fill in setup)
+uint16_t bands_line_vspacing = 4;
+uint16_t bandslabelheight = 10;
+uint16_t bandslabelpos = TFT_HEIGHT - bandslabelheight;
+uint16_t bandslabelmargin = bandslabelheight * 2;
+float bands_vratio = 2; // all collected values will be divided by this, this affects the height of the bands
+uint16_t audospectrumheight = TFT_HEIGHT / bands_vratio;
+uint16_t asvstart = TFT_HEIGHT - bandslabelmargin;
+uint16_t asvend = asvstart - audospectrumheight;
+
+// booleans to manage the display state
+bool displayvolume = true;
+bool displaywaveform = true;
+bool displayspectrometer = true;
+
+// volume level
+long signalAvg = 0, signalMax = 0, signalMin = 4096;
+long max1 = 0, max2 = 0, then, now, nowthen;
+bool isSaturating = false;
+bool wasSaturating = false;
+uint16_t vol = 0; // stores the volume value (0-4096)
+uint16_t volWidth = 0; // stores the display-translated volume bar width
+float volMod = 1; // fps maintainer: multiplier for waveform, more volume = smaller lines
+float lastVolMod = 1;
+
+
+void setBrightness(uint8_t brightness) {
+  ledcSetup(2, 10000, 8);
+  ledcAttachPin(TFT_LED_PIN, 2);
+  ledcWrite(2, brightness);
 }
 
-void loop() {
-  display.clear();        
-  display.drawString(0,0,"125 250 500 1K  2K 4K 8K 16K");
-  for (int i = 0; i < SAMPLES; i++) {
-    newTime = micros()-oldTime;
-    oldTime = newTime;
-    vReal[i] = analogRead(A0); // Using Arduino ADC nomenclature. A conversion takes about 1uS on an ESP32
-  //vReal[i] = analogRead(VP); // Using logical name fo ADC port
-  //vReal[i] = analogRead(36); // Using pin number for ADC port
-    vImag[i] = 0;
-    while (micros() < (newTime + sampling_period_us)) { /* do nothing to wait */ }
+
+void drawAudioSpectrumGrid() {
+  tft.setTextColor(ILI9341_YELLOW);
+
+  audospectrumheight = TFT_HEIGHT / bands_vratio;
+  asvstart = TFT_HEIGHT - bandslabelmargin;
+  asvend = asvstart - audospectrumheight - bandslabelmargin;
+
+  Serial.println("audospectrumheight:"+ String(audospectrumheight));
+  Serial.println("asvstart:"+String(asvstart));
+  Serial.println("asvend:"+String(asvend));
+
+  Serial.println( "Audio Spectrum Height(px): " + String(audospectrumheight) + " Start at:" + String(asvstart) + " End at:" + String(asvend));
+
+  /*
+    for(uint8_t i=0;i<TFT_HEIGHT;i++) {
+      // debug: prefill with blue
+      colormap[i] = tft.color565(0, 0, 255);
+    }
+  */
+  for (uint16_t i = asvstart; i >= asvend; i--) {
+    uint16_t projected = map(i, asvend - 1, asvstart + 1, 0, 127);
+    //Serial.println("pixel[" + String(i) + "] + map(" + String(projected) + ") = rgb(" + String(128 + projected) + ", " + String(255 - projected) + ", 0)");
+    colormap[i] = tft.color565(255 - projected / 2, 128 + projected, 0);
   }
+
+  for (byte band = 0; band < bands; band++) {
+    tft.setCursor(bands_width * band + 2, bandslabelpos);
+    tft.print(audiospectrum[band].freqname);
+  }
+}
+
+
+
+
+
+
+void displayBand(int band, int dsize) {
+  uint16_t hpos = bands_width * band + (bands_pad / 2);
+  int dmax = (TFT_HEIGHT / bands_vratio) - 20; // roof value
+  dsize /= bands_vratio;
+  if (dsize > audospectrumheight) {
+    dsize = audospectrumheight; // leave some hspace for text
+  }
+  if (dsize < audiospectrum[band].lastval) {
+    // lower value, delete some lines
+    uint8_t bardelta = dsize % bands_line_vspacing;
+    for (int s = dsize - bardelta; s <= audiospectrum[band].lastval; s = s + bands_line_vspacing) {
+      tft.drawFastHLine(hpos, TFT_HEIGHT - (s + 20), bands_pad, ILI9341_BLACK);
+    }
+  }
+  if (dsize > dmax) dsize = dmax;
+  for (int s = 0; s <= dsize; s = s + bands_line_vspacing) {
+    uint8_t vpos = TFT_HEIGHT - (s + 20);
+    tft.drawFastHLine(hpos, vpos, bands_pad, colormap[vpos]);
+  }
+  if (dsize > audiospectrum[band].peak) {
+    audiospectrum[band].peak = dsize;
+  }
+  audiospectrum[band].lastval = dsize;
+  audiospectrum[band].lastmeasured = millis();
+}
+
+
+void setBandwidth() {
+  byte multiplier = SAMPLES / 256;
+  bandWidth[0] = audiospectrum[0].bandWidth * multiplier;
+  for (byte j = 1; j < bands; j++) {
+    bandWidth[j] = audiospectrum[j].bandWidth * multiplier + bandWidth[j - 1];
+  }
+  wmultiplier = ((float)TFT_WIDTH / (float)SAMPLES) * 4;
+}
+
+
+byte getBand(int i) {
+  for (byte j = 0; j < bands; j++) {
+    if (i <= bandWidth[j]) return j;
+  }
+  return bands;
+}
+
+
+void peakWaveForm() {
+  for (uint16_t i = 0; i < SAMPLES / 2; i++) {
+    if (eQGraph[i] >= 0.00005) {
+      eQGraph[i] /= 2;//(2+getBand(i));
+    } else {
+      eQGraph[i] = 0;
+    }
+  }
+}
+
+
+
+void displayWaveForm(uint16_t color) {
+  uint16_t lastx = 1;
+  uint16_t lasty = WAVEFORM_YPOS;
+  float wSqueeze = WAVEFORM_SQUEEZE;
+  uint8_t maxWaveFormHeight = WAVEFORM_YPOS / 2;
+
+  if (color == ILI9341_BLACK) {
+    //isSaturating = wasSaturating;
+    //volMod = lastVolMod;
+  } else {
+    wasSaturating = isSaturating;
+    lastVolMod = volMod;
+    wafeformdirtoggler = !wafeformdirtoggler;
+    uint red = vol / 32;
+    color = tft.color565(red+128, 255-red, 0);
+  }
+/*
+  float toLog = 1.5-lastVolMod*1.5;
+  if(toLog!=0.00) {
+    // https://www.google.com/search?q=y%3D(-log(1.5-x*1.5))*8
+    float volSqueezer = (-log(toLog))*8;
+    if(volSqueezer > 0.00) {
+      wSqueeze += volSqueezer;//+WAVEFORM_SQUEEZE;
+    } else {
+      wSqueeze /= -volSqueezer;
+    }
+  }
+  */
+  wSqueeze = 2;
+
+  byte wafeformdirection = wafeformdirtoggler ? 1 : 0;
+  for (uint16_t i = 1; i < SAMPLES / 4; i++) {
+
+    if (eQGraph[i] >= 0.00005) {
+      uint tmpy;
+      uint nextx = i * wmultiplier;
+      uint eQGraphPos = eQGraph[i] / wSqueeze;
+
+      if (eQGraphPos > maxWaveFormHeight) { // roof values
+        eQGraphPos = maxWaveFormHeight;
+      }
+
+      if (i % 2 == wafeformdirection) {
+        tmpy = WAVEFORM_YPOS + eQGraphPos;
+      } else {
+        tmpy = WAVEFORM_YPOS - eQGraphPos;
+      }
+
+      if (lasty != 0) {
+        //color = color==ILI9341_BLACK ? color : colormap[(byte)TFT_HEIGHT-(eQGraph[i])];
+        tft.drawLine(lastx, lasty, nextx, tmpy, color);
+      }
+      lastx = nextx;
+      lasty = tmpy;
+    }
+  }
+  tft.drawLine(lastx, lasty, lastx + 1, WAVEFORM_YPOS, color);
+  if (lastx < TFT_WIDTH && color != ILI9341_BLACK) {
+    tft.drawLine(lastx + 1, WAVEFORM_YPOS, TFT_WIDTH, WAVEFORM_YPOS, color);
+  }
+}
+
+
+void captureSoundSample() {
+  signalAvg = 0;
+  signalMax = 0;
+  signalMin = 4096;
+
+  for (int i = 0; i < SAMPLES; i++) {
+    newTime = micros();
+    if ( adcread ) {
+      vReal[i] = adc1_get_raw( ADC1_CHANNEL_0 ); // A raw conversion takes about 20uS on an ESP32
+      delayMicroseconds(20);
+    } else {
+      vReal[i] = analogRead(A0); // A conversion takes about 1uS on an ESP32
+    }
+
+    vImag[i] = 0;
+    
+    signalMin = min(signalMin, vReal[i]);
+    signalMax = max(signalMax, vReal[i]);
+    signalAvg += vReal[i];
+
+    while ((micros() - newTime) < sampling_period_us) {
+      // do nothing to wait
+      //yield();
+    }
+  }
+
   FFT.Windowing(vReal, SAMPLES, FFT_WIN_TYP_HAMMING, FFT_FORWARD);
   FFT.Compute(vReal, vImag, SAMPLES, FFT_FORWARD);
   FFT.ComplexToMagnitude(vReal, vImag, SAMPLES);
-  for (int i = 2; i < (SAMPLES/2); i++){ // Don't use sample 0 and only the first SAMPLES/2 are usable.
-    // Each array element represents a frequency and its value, is the amplitude. Note the frequencies are not discrete.
-    if (vReal[i] > 1500) { // Add a crude noise filter, 10 x amplitude or more
-      if (i<=2 )             displayBand(0,(int)vReal[i]); // 125Hz
-      if (i >2   && i<=4 )   displayBand(1,(int)vReal[i]); // 250Hz
-      if (i >4   && i<=7 )   displayBand(2,(int)vReal[i]); // 500Hz
-      if (i >7   && i<=15 )  displayBand(3,(int)vReal[i]); // 1000Hz
-      if (i >15  && i<=40 )  displayBand(4,(int)vReal[i]); // 2000Hz
-      if (i >40  && i<=70 )  displayBand(5,(int)vReal[i]); // 4000Hz
-      if (i >70  && i<=288 ) displayBand(6,(int)vReal[i]); // 8000Hz
-      if (i >288           ) displayBand(7,(int)vReal[i]); // 16000Hz
-      //Serial.println(i);
-    }
-    for (byte band = 0; band <= 7; band++) display.drawHorizontalLine(1+16*band,64-peak[band],14);
+
+  signalAvg /= SAMPLES;
+  vol = (signalMax - signalMin);
+  volWidth = map(vol, 0, 4096, 1, TFT_WIDTH);
+  volMod = (float) map(vol, 0, 4096, 1, 1000) / 1000;
+}
+
+
+
+
+
+void renderSpectrometer() {
+  if (displayvolume) {
+    tft.drawFastHLine(0, 20, volWidth, ILI9341_GREEN);
+    tft.drawFastHLine(volWidth, 20, TFT_WIDTH - volWidth, ILI9341_BLACK);
+    if (volMod >= .75) isSaturating = true;
+    else isSaturating = false;
+    isSaturating = false;
   }
-  if (millis()%4 == 0) {for (byte band = 0; band <= 7; band++) {if (peak[band] > 0) peak[band] -= 1;}} // Decay the peak
-  display.display();
+
+  if (displaywaveform) {
+    displayWaveForm(ILI9341_BLACK);
+    peakWaveForm();
+  }
+
+  for (int i = 2; i < (SAMPLES / 2); i++) { // Don't use sample 0 and only first SAMPLES/2 are usable. Each array element represents a frequency and its value the amplitude.
+    if (vReal[i] > 512) { // Add a crude noise filter, 10 x amplitude or more
+      byte bandNum = getBand(i);
+      if (bandNum != bands) {
+        audiospectrum[bandNum].curval = (int)vReal[i] / audiospectrum[bandNum].amplitude;
+        if (displayspectrometer) {
+          displayBand(bandNum, audiospectrum[bandNum].curval);
+        }
+        if (displaywaveform) {
+          eQGraph[i] = audiospectrum[bandNum].curval;
+        }
+      }
+    }
+  }
+
+  if (displaywaveform) {
+    displayWaveForm(ILI9341_GREEN);
+  }
+
+  if (displayspectrometer) {
+    long vnow = millis();
+    bool peakchanged = false;
+    for (byte band = 0; band < bands; band++) {
+      // auto decay every 50ms on low activity bands
+      if (vnow - audiospectrum[band].lastmeasured > 50) {
+        displayBand(band, audiospectrum[band].lastval > bands_line_vspacing ? audiospectrum[band].lastval - bands_line_vspacing : 0);
+      }
+      if (audiospectrum[band].peak > 0) {
+        audiospectrum[band].peak -= bands_line_vspacing;//(band/3)+2;
+        if (audiospectrum[band].peak <= 0) {
+          audiospectrum[band].peak = 0;
+        }
+      }
+      // only redraw peak if changed
+      if (audiospectrum[band].lastpeak != audiospectrum[band].peak) {
+        peakchanged = true;
+        // delete last peak
+        tft.drawFastHLine(bands_width * band + (bands_pad / 2), TFT_HEIGHT - audiospectrum[band].lastpeak - 20, bands_pad, ILI9341_BLACK);
+        audiospectrum[band].lastpeak = audiospectrum[band].peak;
+        tft.drawFastHLine(bands_width * band + (bands_pad / 2), TFT_HEIGHT - audiospectrum[band].peak - 20, bands_pad, colormap[TFT_HEIGHT - audiospectrum[band].peak - 20]);
+      }
+    }
+  }
 }
 
-void displayBand(int band, int dsize){
-  int dmax = 50;
-  dsize /= amplitude;
-  if (dsize > dmax) dsize = dmax;
-  for (int s = 0; s <= dsize; s=s+2){display.drawHorizontalLine(1+16*band,64-s, 14);}
-  if (dsize > peak[band]) {peak[band] = dsize;}
+
+void handleSerial() {
+  if (Serial.available()) {
+    // toggle display modes
+    char c = Serial.read();
+    if (displaywaveform) {
+      displayWaveForm(ILI9341_BLACK);
+      memset(eQGraph, 0, TFT_WIDTH);
+    }
+    switch (c) {
+      case 'a':
+        adcread = !adcread;
+        Serial.println("Use adc RAW " + String(adcread));
+        tft.fillScreen(ILI9341_BLACK);
+        break;
+      case 'v':
+        displayvolume = !displayvolume;
+        Serial.println("Volume " + String(displayvolume));
+        tft.fillScreen(ILI9341_BLACK);
+        break;
+      case 'w':
+        displaywaveform = !displaywaveform;
+        Serial.println("Waveform " + String(displaywaveform));
+        tft.fillScreen(ILI9341_BLACK);
+        break;
+      case 's':
+        displayspectrometer = !displayspectrometer;
+        Serial.println("Spectro " + String(displayspectrometer));
+        tft.fillScreen(ILI9341_BLACK);
+        break;
+      case '+':
+        SAMPLES *= 2;
+        Serial.println("Sampling buffer " + String(SAMPLES));
+        break;
+      case '-':
+        if (SAMPLES / 2 > 32) {
+          SAMPLES /= 2;
+        }
+        Serial.println("Sampling buffer " + String(SAMPLES));
+        break;
+      case '*':
+        if ( bands + 1 <= 8 ) bands++;
+        bands_width = floor( TFT_WIDTH / bands );
+        bands_pad = bands_width - (TFT_WIDTH / 16);
+        tft.fillScreen(ILI9341_BLACK);
+        Serial.println("EQ Bands " + String(bands));
+        break;
+      case '/':
+        if ( bands - 1 > 0 ) bands--;
+        bands_width = floor( TFT_WIDTH / bands );
+        bands_pad = bands_width - (TFT_WIDTH / 16);
+        tft.fillScreen(ILI9341_BLACK);
+        Serial.println("EQ Bands " + String(bands));
+        break;
+      case '@':
+        int SAMPLESIZE = SAMPLES / 2;
+        int i = 0;
+
+        for (int mag = 1; mag < SAMPLESIZE; mag = mag * 2) {
+          byte magmapped = map(mag, 1, SAMPLESIZE, 1, TFT_WIDTH);
+          Serial.println("#" + String(i) + " " + String(magmapped) + " " + String(mag)  );
+          i++;
+        }
+        /*
+          for (int i = 2; i < (SAMPLES/2); i++){ // Don't use sample 0 and only first SAMPLES/2 are usable. Each array element represents a frequency and its value the amplitude.
+          if (vReal[i] > 512) { // Add a crude noise filter, 10 x amplitude or more
+            //byte bandNum = getBand(i);
+
+          }
+          }*/
+
+        break;
+
+    }
+    if (displayspectrometer) {
+      drawAudioSpectrumGrid();
+    }
+    setBandwidth();
+    max1 = 0;
+    max2 = 0;
+  }
 }
 
+
+void setup() {
+  WiFi.mode(WIFI_MODE_NULL);
+  Serial.begin(115200);
+  Serial.println();
+
+/*
+  adc1_config_width(ADC_WIDTH_12Bit);   //Range 0-1023
+  adc1_config_channel_atten(ADC1_CHANNEL_0, ADC_ATTEN_11db); //ADC_ATTEN_DB_11 = 0-3,6V
+  sampling_period_us = round(1000000 * (1.0 / SAMPLING_FREQUENCY));
+*/
+
+  pinMode(A0, ANALOG);
+  /*
+  adcAttachPin(A0);
+  analogReadResolution(ADC_WIDTH_12Bit);
+  analogSetAttenuation(ADC_11db);
+*/
+
+  tft.begin();
+  tft.setRotation( 3 );
+  tft.fillScreen(ILI9341_BLACK);
+  tft.setTextColor(ILI9341_YELLOW);
+  tft.setCursor(98, 42);
+  setBrightness(255);
+  tft.print("Sampling at: " + String(sampling_period_us) + "uS");
+  Serial.println("Screen dimensions: " + String(TFT_WIDTH) + "x" + String(TFT_HEIGHT));
+  Serial.println("wmultiplier:" + String(wmultiplier));
+  Serial.println("bands_width:"+String(bands_width));
+  Serial.println("bands_pad:"+String(bands_pad));
+  Serial.println("bandslabelpos:"+String(bandslabelpos));
+  Serial.println("bandslabelmargin:"+String(bandslabelmargin));
+
+  
+  delay(1000);
+
+  tft.fillScreen(ILI9341_BLACK);
+
+  drawAudioSpectrumGrid();
+  setBandwidth();
+  memset(eQGraph, 0, TFT_WIDTH);
+
+}
+
+
+
+
+void loop() {
+
+  handleSerial();
+  captureSoundSample();
+  renderSpectrometer();
+
+}
